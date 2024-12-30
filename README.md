@@ -8,3 +8,6 @@ The project focuses on web page cloning, allowing for the automated copying and 
 the project extracts static data from pages, such as text, images, and links. For dynamic pages that require interaction, Selenium is used to navigate and capture interactive content.
 The use of aiohttp speeds up the asynchronous data collection process, while zipfile and shutil are employed for file manipulation, enabling the extraction and organization of cloned content.
 The tqdm library provides a progress bar to track the cloning process. The goal is to create a functional replica of a web page, preserving the original structure and content.
+
+Precisa melhorar? Sim
+Need improvement? Yes
