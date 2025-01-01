@@ -13,8 +13,10 @@ import logging
 import shutil
 from urllib.parse import urljoin, urlparse
 from tqdm import tqdm
-from zipfile import ZipFile
-import time
+import json
+import zipfile
+from datetime import datetime
+from pathlib import Path
 
 # Configurações de log
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -36,25 +38,22 @@ def create_directory(path):
 # Função para salvar arquivos
 async def save_file(session, url, output_dir):
     try:
-        parsed_url = urlparse(url)
-        subdir = 'outros'
-        if parsed_url.path.endswith(('.css', '.js')):
-            subdir = parsed_url.path.split('.')[-1]
-        elif parsed_url.path.endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg')):
-            subdir = 'imagens'
-
-        full_dir = os.path.join(output_dir, subdir)
-        create_directory(full_dir)
-
         async with session.get(url) as response:
             if response.status == 200:
-                filename = os.path.basename(parsed_url.path)
-                filepath = os.path.join(full_dir, filename)
+                parsed_url = urlparse(url)
+                directory = os.path.join(output_dir, parsed_url.netloc, os.path.dirname(parsed_url.path).lstrip("/"))
+                create_directory(directory)
+
+                filename = os.path.basename(parsed_url.path) or 'index.html'
+                filepath = os.path.join(directory, filename)
+
                 with open(filepath, 'wb') as f:
                     f.write(await response.read())
                 logging.info(f"Arquivo salvo: {filepath}")
+                return filepath
     except Exception as e:
         logging.error(f"Erro ao salvar arquivo {url}: {e}")
+        return None
 
 # Função de autenticação usando Selenium
 def authenticate_with_selenium(login_url, username, password):
@@ -83,20 +82,44 @@ def authenticate_with_selenium(login_url, username, password):
     finally:
         driver.quit()
 
-# Função de compactação
-def zip_directory(directory):
-    zip_file = f"{directory}.zip"
-    with ZipFile(zip_file, 'w') as zipf:
+# Compacta o diretório clonado
+def compress_directory(directory):
+    zip_path = f"{directory}.zip"
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
         for root, _, files in os.walk(directory):
             for file in files:
-                file_path = os.path.join(root, file)
-                arcname = os.path.relpath(file_path, start=directory)
-                zipf.write(file_path, arcname=arcname)
-    logging.info(f"Diretório compactado em: {zip_file}")
+                full_path = os.path.join(root, file)
+                relative_path = os.path.relpath(full_path, start=directory)
+                zipf.write(full_path, arcname=relative_path)
+    logging.info(f"Diretório compactado em: {zip_path}")
+
+# Função para validar e ajustar a URL
+def validate_url(url):
+    if not urlparse(url).scheme:
+        url = "https://" + url
+    return url
+
+# Função para corrigir referências no HTML
+def fix_html_references(html_content, base_url, output_dir):
+    soup = BeautifulSoup(html_content, "html.parser")
+
+    for tag, attr in [("img", "src"), ("link", "href"), ("script", "src")]:
+        for element in soup.find_all(tag):
+            url_asset = element.get(attr)
+            if url_asset:
+                full_url = urljoin(base_url, url_asset)
+                parsed_url = urlparse(full_url)
+                local_path = os.path.join(parsed_url.netloc, parsed_url.path.lstrip("/"))
+                element[attr] = local_path
+
+    return soup.prettify()
 
 # Função de scraping principal
 def clone_page(url, use_selenium=False, username=None, password=None):
     ensure_selenium()
+
+    # Validar e ajustar a URL
+    url = validate_url(url)
 
     # Extrair nome do site para criar pasta automaticamente
     parsed_url = urlparse(url)
@@ -116,8 +139,9 @@ def clone_page(url, use_selenium=False, username=None, password=None):
             async with session.get(url) as response:
                 if response.status == 200:
                     page_content = await response.text()
+                    fixed_content = fix_html_references(page_content, url, output_dir)
                     with open(os.path.join(output_dir, "index.html"), "w", encoding="utf-8") as f:
-                        f.write(page_content)
+                        f.write(fixed_content)
                     logging.info("HTML principal salvo.")
                     return page_content, session
                 else:
@@ -143,14 +167,18 @@ def clone_page(url, use_selenium=False, username=None, password=None):
                     pbar.update(1)
 
     async def main():
+        start_time = datetime.now()
         page_content, session = await fetch_content()
         if page_content:
             await fetch_assets(page_content)
+        end_time = datetime.now()
+        elapsed_time = (end_time - start_time).total_seconds()
+        logging.info(f"Tempo total de execução: {elapsed_time:.2f} segundos")
 
     asyncio.run(main())
 
-    # Compacta o diretório após o download
-    zip_directory(output_dir)
+    # Compacta o diretório ao final
+    compress_directory(output_dir)
 
 # Interface do usuário
 def main():
@@ -163,10 +191,7 @@ def main():
         username = input("Digite o usuário: ").strip()
         password = input("Digite a senha: ").strip()
 
-    start_time = time.time()
     clone_page(url, use_selenium, username, password)
-    end_time = time.time()
-    logging.info(f"Tempo total de execução: {end_time - start_time:.2f} segundos")
 
 if __name__ == "__main__":
     main()
