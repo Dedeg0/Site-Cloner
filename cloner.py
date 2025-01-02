@@ -1,4 +1,5 @@
 import os
+import random
 import requests
 from bs4 import BeautifulSoup
 from selenium import webdriver
@@ -20,6 +21,15 @@ from pathlib import Path
 
 # Configurações de log
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Lista dinâmica de User-Agents
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (iPad; CPU OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1"
+]
 
 # Verifica e instala o Selenium automaticamente
 def ensure_selenium():
@@ -76,6 +86,19 @@ def authenticate_with_selenium(login_url, username, password):
         password_field.send_keys(password)
         login_button.click()
 
+        # Verificar se há autenticação multifator (MFA)
+        mfa_field = None
+        try:
+            mfa_field = driver.find_element(By.NAME, "mfa")  # Ajuste conforme o seletor do campo de MFA
+        except Exception:
+            pass
+
+        if mfa_field:
+            mfa_code = input("Digite o código de autenticação multifator (MFA): ").strip()
+            mfa_field.send_keys(mfa_code)
+            mfa_field.send_keys(Keys.RETURN)
+            logging.info("Autenticação multifator concluída.")
+
         logging.info("Login realizado com sucesso.")
         cookies = driver.get_cookies()
         return cookies
@@ -103,7 +126,7 @@ def validate_url(url):
 def fix_html_references(html_content, base_url, output_dir):
     soup = BeautifulSoup(html_content, "html.parser")
 
-    for tag, attr in [("img", "src"), ("link", "href"), ("script", "src")]:
+    for tag, attr in [("img", "src"), ("link", "href"), ("script", "src"), ("source", "srcset"), ("img", "data-src")]:
         for element in soup.find_all(tag):
             url_asset = element.get(attr)
             if url_asset:
@@ -132,7 +155,8 @@ def clone_page(url, use_selenium=False, username=None, password=None):
     if use_selenium and username and password:
         cookies = authenticate_with_selenium(url, username, password)
 
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+    # Seleciona dinamicamente um User-Agent
+    headers = {"User-Agent": random.choice(USER_AGENTS)}
 
     async def fetch_content():
         async with aiohttp.ClientSession(headers=headers, cookies={cookie['name']: cookie['value'] for cookie in cookies} if cookies else None) as session:
@@ -143,7 +167,7 @@ def clone_page(url, use_selenium=False, username=None, password=None):
                     with open(os.path.join(output_dir, "index.html"), "w", encoding="utf-8") as f:
                         f.write(fixed_content)
                     logging.info("HTML principal salvo.")
-                    return page_content, session
+                    return page_content
                 else:
                     logging.error(f"Erro ao acessar a página: {response.status}")
 
@@ -153,7 +177,7 @@ def clone_page(url, use_selenium=False, username=None, password=None):
 
             # Captura links para recursos estáticos
             assets = []
-            for tag, attr in [("img", "src"), ("link", "href"), ("script", "src")]:
+            for tag, attr in [("img", "src"), ("link", "href"), ("script", "src"), ("source", "srcset"), ("img", "data-src")]:
                 for element in soup.find_all(tag):
                     url_asset = element.get(attr)
                     if url_asset:
@@ -167,18 +191,18 @@ def clone_page(url, use_selenium=False, username=None, password=None):
                     pbar.update(1)
 
     async def main():
-        start_time = datetime.now()
-        page_content, session = await fetch_content()
+        logging.info("Iniciando o processo de scraping...")
+        page_content = await fetch_content()
         if page_content:
             await fetch_assets(page_content)
-        end_time = datetime.now()
-        elapsed_time = (end_time - start_time).total_seconds()
-        logging.info(f"Tempo total de execução: {elapsed_time:.2f} segundos")
+            logging.info("Todos os recursos foram processados.")
 
     asyncio.run(main())
 
-    # Compacta o diretório ao final
-    compress_directory(output_dir)
+    # Pergunta ao usuário sobre compressão
+    compress = input("Deseja compactar os arquivos clonados? (s/n): ").strip().lower() == 's'
+    if compress:
+        compress_directory(output_dir)
 
 # Interface do usuário
 def main():
